@@ -18,6 +18,11 @@ on:
         required: false
         default: false
         type: boolean
+      record_jev_removal:
+        description: Generate the approved JEV removal acknowledgement for PR 137
+        required: false
+        default: false
+        type: boolean
       head_sha:
         description: Exact 40-character pull request head SHA
         required: true
@@ -93,7 +98,7 @@ jobs:
         run: pnpm run check:ci:windows-blocking
 
   workflow-guest:
-    if: inputs.regenerate_workflow_guest || inputs.regenerate_catalogs
+    if: inputs.regenerate_workflow_guest || inputs.regenerate_catalogs || inputs.record_jev_removal
     needs: resolve
     runs-on: ubuntu-latest
     permissions:
@@ -104,6 +109,12 @@ jobs:
           repository: ZulaDDSH/deepseek-harness
           ref: ${{ needs.resolve.outputs.head }}
           persist-credentials: false
+      - name: Confirm JEV record target
+        if: inputs.record_jev_removal
+        env:
+          PR_NUMBER: ${{ inputs.pull_request }}
+        run: |
+          [[ "$PR_NUMBER" == '137' ]] || { echo 'The JEV acknowledgement is restricted to PR 137.'; exit 1; }
       - uses: pnpm/action-setup@v5.0.0
       - uses: actions/setup-node@v7.0.0
         with:
@@ -117,12 +128,25 @@ jobs:
           name: workflow-guest-${{ needs.resolve.outputs.head }}
           path: packages/workflow/workflow-ptc/src/guest-source.ts
           if-no-files-found: error
-      - if: inputs.regenerate_catalogs
+      - if: inputs.regenerate_catalogs || inputs.record_jev_removal
         run: |
           pnpm exec tsx scripts/gen-persistence-catalog.ts
           pnpm exec tsx scripts/persistence-formats.ts --write
+      - name: Record approved JEV removal
+        if: inputs.record_jev_removal
+        run: |
+          cat > "$RUNNER_TEMP/jev-removal-prose.json" <<'JSON'
+          {
+            "en": {
+              "summary": "Remove JEV decision events and JEV role settings.",
+              "compatibility": "Existing sessions using these formats are not supported; the project owner confirmed they are no longer needed.",
+              "verification": "The source and generated catalogs remove JEV. The CI persistence checks validate this acknowledgement."
+            }
+          }
+          JSON
+          pnpm exec tsx scripts/persistence-changes.ts --record 2026-11-16-jev-removal --decision same-version --prose "$RUNNER_TEMP/jev-removal-prose.json" --json
       - uses: actions/upload-artifact@v7.0.1
-        if: inputs.regenerate_catalogs
+        if: inputs.regenerate_catalogs || inputs.record_jev_removal
         with:
           name: persistence-catalogs-${{ needs.resolve.outputs.head }}
           path: |
@@ -132,4 +156,12 @@ jobs:
             docs/persistence-changes/historical-formats/README.md
             docs/persistence-changes/historical-formats/v*.md
             packages/core/session/src/known-event-types.ts
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v7.0.1
+        if: inputs.record_jev_removal
+        with:
+          name: persistence-jev-removal-${{ needs.resolve.outputs.head }}
+          path: |
+            docs/persistence-changes/2026-11-16-jev-removal.md
+            docs/persistence-changes/2026-11-16-jev-removal.schema.json
           if-no-files-found: error

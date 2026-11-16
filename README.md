@@ -4,4 +4,4 @@ This repository runs selected checks for public pull requests in `ZulaDDSH/deeps
 
 Results appear in this repository's Actions tab; they are not automatically attached to the source pull request. The workflow does not store a write token or run deployment steps. Additional lanes from the harness CI are not yet included.
 
-The optional **regenerate workflow guest** input uploads the generated guest source as an artifact for review; it does not write to the harness repository.
+The optional **regenerate workflow guest** input uploads the generated guest source as an artifact for review; it does not write to the harness repository. The **record JEV removal** input is restricted to PR 137 and uploads the owner-approved same-version acknowledgement and regenerated persistence catalogs for the exact verified PR head; it does not commit to the harness repository.
