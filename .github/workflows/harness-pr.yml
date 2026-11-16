@@ -56,7 +56,6 @@ jobs:
     env:
       DSH_TELEMETRY_DISABLED: '1'
       DSH_ARCHIVE_BASE_REF: ${{ needs.resolve.outputs.base }}
-      DSH_GATE_FAIL_FAST: '1'
     steps:
       - uses: actions/checkout@v7.0.1
         with:
