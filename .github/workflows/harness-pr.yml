@@ -8,6 +8,11 @@ on:
         required: true
         default: '137'
         type: string
+      regenerate_workflow_guest:
+        description: Generate workflow guest source as an artifact
+        required: false
+        default: false
+        type: boolean
       head_sha:
         description: Exact 40-character pull request head SHA
         required: true
@@ -81,3 +86,27 @@ jobs:
       - name: Windows builds
         if: matrix.lane == 'windows'
         run: pnpm run check:ci:windows-blocking
+
+  workflow-guest:
+    if: inputs.regenerate_workflow_guest
+    needs: resolve
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          repository: ZulaDDSH/deepseek-harness
+          ref: ${{ needs.resolve.outputs.head }}
+          persist-credentials: false
+      - uses: pnpm/action-setup@v5.0.0
+      - uses: actions/setup-node@v7.0.0
+        with:
+          node-version: '24'
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec tsx scripts/gen-workflow-guest.ts
+      - uses: actions/upload-artifact@v7.0.1
+        with:
+          name: workflow-guest-${{ needs.resolve.outputs.head }}
+          path: packages/workflow/workflow-ptc/src/guest-source.ts
+          if-no-files-found: error
