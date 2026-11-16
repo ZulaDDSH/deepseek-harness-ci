@@ -121,6 +121,7 @@ jobs:
         run: |
           pnpm exec tsx scripts/gen-persistence-catalog.ts
           pnpm exec tsx scripts/persistence-formats.ts --write
+          pnpm exec tsx scripts/gen-config-catalog.ts
       - uses: actions/upload-artifact@v7.0.1
         if: inputs.regenerate_catalogs
         with:
@@ -129,6 +130,7 @@ jobs:
             docs/persistence-catalog.md
             docs/experimental-persistence-catalog.md
             docs/persistence-schema.json
+            docs/config-catalog.md
             docs/persistence-changes/historical-formats/README.md
             docs/persistence-changes/historical-formats/v*.md
             packages/core/session/src/known-event-types.ts
