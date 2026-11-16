@@ -1,0 +1,84 @@
+name: Harness PR checks
+
+on:
+  workflow_dispatch:
+    inputs:
+      pull_request:
+        description: Harness pull request number
+        required: true
+        default: '137'
+        type: string
+      head_sha:
+        description: Exact 40-character pull request head SHA
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    outputs:
+      head: ${{ steps.pr.outputs.head }}
+      base: ${{ steps.pr.outputs.base }}
+    steps:
+      - id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ inputs.pull_request }}
+          EXPECTED_SHA: ${{ inputs.head_sha }}
+        run: |
+          [[ "$PR_NUMBER" =~ ^[0-9]+$ ]] || exit 1
+          [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]] || exit 1
+          gh api "repos/ZulaDDSH/deepseek-harness/pulls/$PR_NUMBER" > "$RUNNER_TEMP/pr.json"
+          head=$(jq -r '.head.sha' "$RUNNER_TEMP/pr.json")
+          base=$(jq -r '.base.sha' "$RUNNER_TEMP/pr.json")
+          [[ "$head" == "$EXPECTED_SHA" ]] || { echo 'The PR head changed; dispatch with its current SHA.'; exit 1; }
+          echo "head=$head" >> "$GITHUB_OUTPUT"
+          echo "base=$base" >> "$GITHUB_OUTPUT"
+
+  checks:
+    needs: resolve
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            lane: static
+          - runner: ubuntu-latest
+            lane: unit
+          - runner: windows-2025
+            lane: windows
+    runs-on: ${{ matrix.runner }}
+    name: ${{ matrix.lane }} / ${{ matrix.runner }}
+    timeout-minutes: 90
+    env:
+      DSH_TELEMETRY_DISABLED: '1'
+      DSH_ARCHIVE_BASE_REF: ${{ needs.resolve.outputs.base }}
+      DSH_GATE_FAIL_FAST: '1'
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          repository: ZulaDDSH/deepseek-harness
+          ref: ${{ needs.resolve.outputs.head }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: pnpm/action-setup@v5.0.0
+      - uses: actions/setup-node@v7.0.0
+        with:
+          node-version: '24'
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Prepare Linux sandbox
+        if: matrix.lane == 'unit'
+        run: bash scripts/prepare-ci-bubblewrap.sh
+      - name: Static checks
+        if: matrix.lane == 'static'
+        run: pnpm run check:ci:static
+      - name: Unit tests
+        if: matrix.lane == 'unit'
+        run: pnpm run check:ci:unit
+      - name: Windows builds
+        if: matrix.lane == 'windows'
+        run: pnpm run check:ci:windows-blocking
