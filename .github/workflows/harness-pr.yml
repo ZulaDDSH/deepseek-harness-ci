@@ -4,14 +4,19 @@ on:
   workflow_dispatch:
     inputs:
       pull_request:
-        description: Harness pull request number
+        description: Harness pull request number, or 0 for master
         required: true
         default: '137'
         type: string
       head_sha:
-        description: Exact 40-character pull request head SHA
+        description: Exact 40-character source SHA
         required: true
         type: string
+      desktop_only:
+        description: Build an unsigned Windows test installer instead of running checks
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -28,17 +33,25 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ inputs.pull_request }}
           EXPECTED_SHA: ${{ inputs.head_sha }}
+          DESKTOP_ONLY: ${{ inputs.desktop_only }}
         run: |
           [[ "$PR_NUMBER" =~ ^[0-9]+$ ]] || exit 1
           [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]] || exit 1
-          gh api "repos/ZulaDDSH/deepseek-harness/pulls/$PR_NUMBER" > "$RUNNER_TEMP/pr.json"
-          head=$(jq -r '.head.sha' "$RUNNER_TEMP/pr.json")
-          base=$(jq -r '.base.sha' "$RUNNER_TEMP/pr.json")
+          if [[ "$PR_NUMBER" == '0' ]]; then
+            [[ "$DESKTOP_ONLY" == 'true' ]] || exit 1
+            head=$(gh api repos/ZulaDDSH/deepseek-harness/commits/master --jq .sha)
+            base=$head
+          else
+            gh api "repos/ZulaDDSH/deepseek-harness/pulls/$PR_NUMBER" > "$RUNNER_TEMP/pr.json"
+            head=$(jq -r '.head.sha' "$RUNNER_TEMP/pr.json")
+            base=$(jq -r '.base.sha' "$RUNNER_TEMP/pr.json")
+          fi
           [[ "$head" == "$EXPECTED_SHA" ]] || { echo 'The PR head changed; dispatch with its current SHA.'; exit 1; }
           echo "head=$head" >> "$GITHUB_OUTPUT"
           echo "base=$base" >> "$GITHUB_OUTPUT"
 
   checks:
+    if: ${{ !inputs.desktop_only }}
     needs: resolve
     strategy:
       fail-fast: false
@@ -81,3 +94,43 @@ jobs:
       - name: Windows builds
         if: matrix.lane == 'windows'
         run: pnpm run check:ci:windows-blocking
+
+  desktop:
+    if: inputs.desktop_only
+    needs: resolve
+    runs-on: windows-2025
+    timeout-minutes: 120
+    env:
+      DSH_TELEMETRY_DISABLED: '1'
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          repository: ZulaDDSH/deepseek-harness
+          ref: ${{ needs.resolve.outputs.head }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: pnpm/action-setup@v5.0.0
+      - uses: actions/setup-node@v7.0.0
+        with:
+          node-version: '24'
+      - run: pnpm install --frozen-lockfile
+      - name: Configure unsigned test package
+        shell: pwsh
+        env:
+          SOURCE_SHA: ${{ needs.resolve.outputs.head }}
+        run: |
+          $contents = @(
+            'DSH_DESKTOP_APP_ID=com.deepseek.harness',
+            'DSH_DESKTOP_AUTO_UPDATE_ENV=test',
+            'DOWNLOAD_TEST_ORIGIN=https://example.invalid',
+            "DOWNLOAD_TEST_RELEASE_ID=$($env:SOURCE_SHA.Substring(0, 32))",
+            'DSH_DESKTOP_MANDATORY_UPDATE_TEST_ORIGIN=https://example.invalid',
+            'DSH_DESKTOP_MANDATORY_UPDATE_CONFIG={"allowedAuthOrigins":["https://example.invalid"]}'
+          ) -join "`n"
+          [System.IO.File]::WriteAllText((Join-Path $PWD 'apps/desktop/.env.windows'), $contents, [System.Text.UTF8Encoding]::new($false))
+      - run: pnpm run package:desktop:win:x64:unsigned
+      - uses: actions/upload-artifact@v7.0.1
+        with:
+          name: windows-unsigned-test-${{ needs.resolve.outputs.head }}
+          path: apps/desktop/.desktop-build/targets/win-x64/unsigned-artifacts/*.exe
+          if-no-files-found: error
