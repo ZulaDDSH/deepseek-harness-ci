@@ -1,4 +1,5 @@
 name: Harness PR checks
+run-name: 'Harness PR #${{ inputs.pull_request }} @ ${{ inputs.head_sha }}'
 
 on:
   workflow_dispatch:
@@ -37,6 +38,23 @@ jobs:
           [[ "$head" == "$EXPECTED_SHA" ]] || { echo 'The PR head changed; dispatch with its current SHA.'; exit 1; }
           echo "head=$head" >> "$GITHUB_OUTPUT"
           echo "base=$base" >> "$GITHUB_OUTPUT"
+      # No pull request code runs in this job, so the status token is never
+      # exposed to it. Without the secret, statuses are skipped.
+      - name: Mark lanes pending on the pull request
+        env:
+          GH_TOKEN: ${{ secrets.HARNESS_STATUS_TOKEN }}
+          HEAD_SHA: ${{ steps.pr.outputs.head }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if [[ -z "$GH_TOKEN" ]]; then
+            echo '::notice::HARNESS_STATUS_TOKEN is not set; results will not appear on the pull request.'
+            exit 0
+          fi
+          for lane in static unit windows; do
+            gh api -X POST "repos/ZulaDDSH/deepseek-harness/statuses/$HEAD_SHA" \
+              -f state=pending -f context="Harness CI / $lane" \
+              -f description='Running in deepseek-harness-ci' -f target_url="$RUN_URL" > /dev/null
+          done
 
   checks:
     needs: resolve
@@ -81,3 +99,37 @@ jobs:
       - name: Windows builds
         if: matrix.lane == 'windows'
         run: pnpm run check:ci:windows-blocking
+
+  # Runs on a fresh runner after the lanes, so pull request code never shares a
+  # machine with the status token. Reads each lane's result from this run.
+  report:
+    needs: [resolve, checks]
+    if: always() && needs.resolve.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+    steps:
+      - name: Report lane results on the pull request
+        env:
+          GH_TOKEN: ${{ secrets.HARNESS_STATUS_TOKEN }}
+          RUN_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ needs.resolve.outputs.head }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          JOBS_PATH: repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/attempts/${{ github.run_attempt }}/jobs
+        run: |
+          if [[ -z "$GH_TOKEN" ]]; then
+            echo '::notice::HARNESS_STATUS_TOKEN is not set; results will not appear on the pull request.'
+            exit 0
+          fi
+          GH_TOKEN="$RUN_TOKEN" gh api --paginate "$JOBS_PATH" --jq '.jobs[] | [.name, (.conclusion // "")] | @tsv' > "$RUNNER_TEMP/jobs.tsv"
+          for lane in static unit windows; do
+            conclusion=$(awk -F'\t' -v lane="$lane" 'index($1, lane " / ") == 1 { print $2 }' "$RUNNER_TEMP/jobs.tsv")
+            case "$conclusion" in
+              success) state=success; description='Passed' ;;
+              failure) state=failure; description='Failed' ;;
+              *) state=error; description="Did not finish (${conclusion:-no result})" ;;
+            esac
+            gh api -X POST "repos/ZulaDDSH/deepseek-harness/statuses/$HEAD_SHA" \
+              -f state="$state" -f context="Harness CI / $lane" \
+              -f description="$description" -f target_url="$RUN_URL" > /dev/null
+          done
