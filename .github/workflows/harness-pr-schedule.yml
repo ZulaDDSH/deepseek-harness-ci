@@ -1,0 +1,62 @@
+name: Harness PR watcher
+
+# Starts Harness PR checks for every open deepseek-harness pull request whose
+# current head commit has not been tested yet. No pull request code runs here.
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: List what would be dispatched without starting runs
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  actions: write
+  contents: read
+
+concurrency:
+  group: harness-pr-watcher
+  cancel-in-progress: false
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          REF: ${{ github.ref_name }}
+          DRY_RUN: ${{ inputs.dry_run || false }}
+        run: |
+          set -euo pipefail
+          # Commits already dispatched, read from the run names of recent checks.
+          gh api "repos/$REPO/actions/workflows/harness-pr.yml/runs?per_page=100" \
+            --jq '.workflow_runs[].display_title' > "$RUNNER_TEMP/titles.txt"
+          gh api --paginate 'repos/ZulaDDSH/deepseek-harness/pulls?state=open&per_page=100' \
+            --jq '.[] | [.number, .head.sha] | @tsv' > "$RUNNER_TEMP/open.tsv"
+          started=0
+          while IFS=$'\t' read -r number sha; do
+            [[ "$number" =~ ^[0-9]+$ && "$sha" =~ ^[0-9a-f]{40}$ ]] || continue
+            if grep -qF "$sha" "$RUNNER_TEMP/titles.txt"; then
+              echo "#$number $sha: already dispatched"
+              continue
+            fi
+            # Also skip a commit that already carries harness statuses.
+            if gh api "repos/ZulaDDSH/deepseek-harness/commits/$sha/statuses?per_page=100" \
+                 --jq '[.[] | select(.context | startswith("Harness CI /"))] | length' | grep -qv '^0$'; then
+              echo "#$number $sha: already has Harness CI statuses"
+              continue
+            fi
+            if [[ "$DRY_RUN" == 'true' ]]; then
+              echo "#$number $sha: would dispatch"
+              continue
+            fi
+            gh api -X POST "repos/$REPO/actions/workflows/harness-pr.yml/dispatches" \
+              -f ref="$REF" -f "inputs[pull_request]=$number" -f "inputs[head_sha]=$sha"
+            echo "#$number $sha: dispatched"
+            started=$((started + 1))
+          done < "$RUNNER_TEMP/open.tsv"
+          echo "Started $started run(s)."

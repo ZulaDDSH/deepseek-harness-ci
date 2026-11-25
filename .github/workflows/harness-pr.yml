@@ -1,4 +1,5 @@
 name: Harness PR checks
+run-name: 'Harness PR #${{ inputs.pull_request }} @ ${{ inputs.head_sha }}'
 
 on:
   workflow_dispatch:
