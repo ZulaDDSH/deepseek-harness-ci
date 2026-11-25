@@ -9,3 +9,5 @@ Enable **desktop only** to build an unsigned Windows x64 test installer from the
 To show results on the source pull request, add a repository secret named `HARNESS_STATUS_TOKEN`: a fine-grained token limited to `ZulaDDSH/deepseek-harness` with **Commit statuses: Read and write** and nothing else. The workflow then marks the static, unit, and Windows lanes as pending on the pull request's head commit and reports each lane's result when it finishes, linking back to the run. The token is used only in jobs that never run pull request code. Without the secret, the workflow runs as before and reports nothing.
 
 **Harness PR watcher** runs every 15 minutes and starts Harness PR checks for each open deepseek-harness pull request whose current head commit hasn't been tested. It skips a commit that already has a run (run names carry the PR number and SHA) or already carries `Harness CI /` statuses. Dispatch it by hand with **dry run** to see what it would start. Scheduled runs only fire from the default branch.
+
+The optional **regenerate workflow guest** input uploads the generated guest source as an artifact for review; it does not write to the harness repository.

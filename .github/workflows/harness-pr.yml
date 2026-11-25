@@ -9,6 +9,16 @@ on:
         required: true
         default: '137'
         type: string
+      regenerate_workflow_guest:
+        description: Generate workflow guest source as an artifact
+        required: false
+        default: false
+        type: boolean
+      regenerate_catalogs:
+        description: Generate persistence catalogs as an artifact
+        required: false
+        default: false
+        type: boolean
       head_sha:
         description: Exact 40-character source SHA
         required: true
@@ -152,6 +162,50 @@ jobs:
         with:
           name: windows-unsigned-test-${{ needs.resolve.outputs.head }}
           path: apps/desktop/.desktop-build/targets/win-x64/unsigned-artifacts/*.exe
+          if-no-files-found: error
+
+  workflow-guest:
+    if: inputs.regenerate_workflow_guest || inputs.regenerate_catalogs
+    needs: resolve
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          repository: ZulaDDSH/deepseek-harness
+          ref: ${{ needs.resolve.outputs.head }}
+          persist-credentials: false
+      - uses: pnpm/action-setup@v5.0.0
+      - uses: actions/setup-node@v7.0.0
+        with:
+          node-version: '24'
+      - run: pnpm install --frozen-lockfile
+      - if: inputs.regenerate_workflow_guest
+        run: pnpm exec tsx scripts/gen-workflow-guest.ts
+      - uses: actions/upload-artifact@v7.0.1
+        if: inputs.regenerate_workflow_guest
+        with:
+          name: workflow-guest-${{ needs.resolve.outputs.head }}
+          path: packages/workflow/workflow-ptc/src/guest-source.ts
+          if-no-files-found: error
+      - if: inputs.regenerate_catalogs
+        run: |
+          pnpm exec tsx scripts/gen-persistence-catalog.ts
+          pnpm exec tsx scripts/persistence-formats.ts --write
+          pnpm exec tsx scripts/gen-config-catalog.ts
+      - uses: actions/upload-artifact@v7.0.1
+        if: inputs.regenerate_catalogs
+        with:
+          name: persistence-catalogs-${{ needs.resolve.outputs.head }}
+          path: |
+            docs/persistence-catalog.md
+            docs/experimental-persistence-catalog.md
+            docs/persistence-schema.json
+            docs/config-catalog.md
+            docs/persistence-changes/historical-formats/README.md
+            docs/persistence-changes/historical-formats/v*.md
+            packages/core/session/src/known-event-types.ts
           if-no-files-found: error
 
   # Runs on a fresh runner after the lanes, so pull request code never shares a
